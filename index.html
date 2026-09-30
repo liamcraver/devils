@@ -106,9 +106,11 @@ const TEAM = "NJD";              // three-letter code of the team to follow
 const LIVE_REFRESH_MS = 20000;   // how often to refresh during a live game
 const PREGAME_REFRESH_MS = 60000;// how often to check for puck drop on game day
 
-// All-time franchise records. The NHL API doesn't provide these, so they're
-// kept by hand. Add or edit lines any time; add another team the same way
-// (e.g. PIT: [["Points", "Lemieux 1723"], ...]) to show it in matchups.
+// All-time franchise records. Career leaders (points, goals, assists, games
+// played, goalie wins, shutouts) load live from records.nhl.com for both teams.
+// Lines here fill in anything the live lookup doesn't cover (like single-season
+// records) and stand in for everything if it fails. Add another team the same
+// way (e.g. PIT: [["Goals, one season", "Lemieux 85 (88-89)"]]).
 const RECORDS = {
   NJD: [
     ["Points", "Elias 1025"],
@@ -234,6 +236,21 @@ async function clubStats(team, season) {
   return null;
 }
 
+// Career franchise leaders from records.nhl.com, as [label, "Name value"] pairs
+const RECORD_STATS = [["Points", "skaters", "points"], ["Goals", "skaters", "goals"], ["Assists", "skaters", "assists"],
+  ["Games played", "skaters", "gamesPlayed"], ["Goalie wins", "goalies", "wins"], ["Shutouts", "goalies", "shutouts"]];
+async function franchiseRecords(team) {
+  const franchise = (await api("records/franchise")).data?.find((f) => f.teamAbbrev === team && f.lastSeasonId == null);
+  if (!franchise) return null;
+  const lines = await Promise.all(RECORD_STATS.map(async ([label, kind, stat]) => {
+    try {
+      const p = (await api(`records/${kind}/${franchise.id}/${stat}`)).data?.[0];
+      return p && p[stat] != null ? [label, `${p.lastName} ${p[stat]}`] : null;
+    } catch (e) { return null; }
+  }));
+  return lines.filter(Boolean);
+}
+
 async function loadMatchup(token) {
   const g = S.game, opp = oppOf(g).abbrev;
   const done = S.games.filter((x) => isDone(x.gameState) && x.startTimeUTC < g.startTimeUTC);
@@ -242,16 +259,19 @@ async function loadMatchup(token) {
   const nextMeeting = S.games.find((x) => x.startTimeUTC > g.startTimeUTC && oppOf(x).abbrev === opp);
   const nextGame = S.games.find((x) => x.startTimeUTC > g.startTimeUTC);
 
-  const [standings, usStats, oppStats, lastBox, meetBox] = await Promise.allSettled([
+  const [standings, usStats, oppStats, lastBox, meetBox, usRecords, oppRecords] = await Promise.allSettled([
     api("v1/standings/now"),
     clubStats(TEAM, g.season),
     clubStats(opp, g.season),
     lastGame ? api(`v1/gamecenter/${lastGame.id}/boxscore`) : null,
     meetings[0] ? api(`v1/gamecenter/${meetings[0].id}/boxscore`) : null,
+    franchiseRecords(TEAM),
+    franchiseRecords(opp),
   ]);
   if (token !== S.token) return;
   const val = (p) => (p.status === "fulfilled" ? p.value : null);
-  S.matchup = { opp, standings: val(standings), usStats: val(usStats), oppStats: val(oppStats), lastGame, lastBox: val(lastBox), meetings, meetBox: val(meetBox), nextMeeting, nextGame };
+  S.matchup = { opp, standings: val(standings), usStats: val(usStats), oppStats: val(oppStats), lastGame, lastBox: val(lastBox), meetings, meetBox: val(meetBox), nextMeeting, nextGame,
+    records: { [TEAM]: val(usRecords), [opp]: val(oppRecords) } };
   render();
 }
 
@@ -447,11 +467,13 @@ function boxSummary(box, abbrev) {
   const nm = (p) => p.name?.default ?? "";
   const scorers = skaters.filter((p) => p.goals > 0).sort((a, b) => b.goals - a.goals).map((p) => `${nm(p)}${p.goals > 1 ? ` ×${p.goals}` : ""}`).join(", ");
   const assists = skaters.filter((p) => p.assists > 0).sort((a, b) => b.assists - a.assists).map((p) => `${nm(p)}${p.assists > 1 ? ` ×${p.assists}` : ""}`).join(", ");
+  const pts = (p) => p.points ?? (p.goals ?? 0) + (p.assists ?? 0);
+  const points = skaters.filter((p) => pts(p) > 0).sort((a, b) => pts(b) - pts(a)).map((p) => `${nm(p)} ${pts(p)}`).join(", ");
   const shotLead = [...skaters].sort((a, b) => (b.sog ?? 0) - (a.sog ?? 0))[0];
   const toiLead = [...skaters].sort((a, b) => secs(b.toi) - secs(a.toi))[0];
   const saves = goalies.reduce((s, g) => s + (g.saves ?? (Number(String(g.saveShotsAgainst ?? "0/0").split("/")[0]) || 0)), 0);
   const teamShots = box[side]?.sog ?? skaters.reduce((s, p) => s + (p.sog ?? 0), 0);
-  return { scorers: scorers || "None", assists: assists || "None", shotLead: shotLead ? `${nm(shotLead)}, ${shotLead.sog ?? 0}` : "—", toiLead: toiLead ? `${nm(toiLead)}, ${toiLead.toi}` : "—", saves, teamShots, opp: box[oside]?.abbrev };
+  return { scorers: scorers || "None", assists: assists || "None", points: points || "None", shotLead: shotLead ? `${nm(shotLead)}, ${shotLead.sog ?? 0}` : "—", toiLead: toiLead ? `${nm(toiLead)}, ${toiLead.toi}` : "—", saves, teamShots, opp: box[oside]?.abbrev };
 }
 
 function renderMatchup() {
@@ -484,7 +506,7 @@ function renderMatchup() {
   const lb = boxSummary(M.lastBox, TEAM);
   const last = M.lastGame && lb ? `<dl class="kv">
     <dt>Result</dt><dd>${resultText(M.lastGame)} ${atHome(M.lastGame) ? "vs" : "at"} ${esc(oppOf(M.lastGame).abbrev)}, ${shortDate(M.lastGame.startTimeUTC)}</dd>
-    <dt>Goals</dt><dd>${esc(lb.scorers)}</dd><dt>Assists</dt><dd>${esc(lb.assists)}</dd>
+    <dt>Goals</dt><dd>${esc(lb.scorers)}</dd><dt>Assists</dt><dd>${esc(lb.assists)}</dd><dt>Points</dt><dd>${esc(lb.points)}</dd>
     <dt>Most shots</dt><dd>${esc(lb.shotLead)}</dd><dt>Most ice time</dt><dd>${esc(lb.toiLead)}</dd>
     <dt>Saves</dt><dd>${lb.saves}</dd><dt>Team shots</dt><dd>${lb.teamShots}</dd></dl>`
     : `<p class="empty">${M.lastGame ? "Couldn't load the last game's boxscore." : "No earlier games this season."}</p>`;
@@ -499,8 +521,13 @@ function renderMatchup() {
     : `<p class="empty">Season stats aren't available yet.</p>`;
 
   // Records
-  const recTeams = [TEAM, opp].filter((t) => RECORDS[t]);
-  const records = recTeams.map((t) => `<h3>${esc(t)}</h3><dl class="kv">${RECORDS[t].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`).join("");
+  // Live career leaders first, then hand-kept lines for anything they don't cover
+  const recordsFor = (t) => {
+    const live = M.records?.[t] ?? [];
+    return [...live, ...(RECORDS[t] ?? []).filter(([k]) => !live.some(([lk]) => lk === k))];
+  };
+  const records = [TEAM, opp].map((t) => [t, recordsFor(t)]).filter(([, r]) => r.length)
+    .map(([t, r]) => `<h3>${esc(t)}</h3><dl class="kv">${r.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`).join("");
 
   // Goalies
   const goalieTable = (stats, team) => {
