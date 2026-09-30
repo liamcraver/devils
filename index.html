@@ -238,14 +238,17 @@ async function clubStats(team, season) {
 
 // Career franchise leaders from records.nhl.com, as [label, "Name value"] pairs
 const RECORD_STATS = [["Points", "skaters", "points"], ["Goals", "skaters", "goals"], ["Assists", "skaters", "assists"],
-  ["Games played", "skaters", "gamesPlayed"], ["Goalie wins", "goalies", "wins"], ["Shutouts", "goalies", "shutouts"]];
+  ["Games played", "skaters", "gamesPlayed"], ["Goalie wins", "goalies", "wins"], ["Shutouts", "goalies", "shutouts"],
+  ["Goals, one season", "season", "goals"], ["Points, one season", "season", "points"]];
+const seasonShort = (id) => `${String(id).slice(2, 4)}-${String(id).slice(6)}`; // 20052006 -> "05-06"
 async function franchiseRecords(team) {
   const franchise = (await api("records/franchise")).data?.find((f) => f.teamAbbrev === team && f.lastSeasonId == null);
   if (!franchise) return null;
   const lines = await Promise.all(RECORD_STATS.map(async ([label, kind, stat]) => {
     try {
       const p = (await api(`records/${kind}/${franchise.id}/${stat}`)).data?.[0];
-      return p && p[stat] != null ? [label, `${p.lastName} ${p[stat]}`] : null;
+      if (!p || p[stat] == null) return null;
+      return [label, `${p.lastName} ${p[stat]}${kind === "season" && p.seasonId ? ` (${seasonShort(p.seasonId)})` : ""}`];
     } catch (e) { return null; }
   }));
   return lines.filter(Boolean);

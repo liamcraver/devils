@@ -34,7 +34,7 @@ global.fetch=async(url)=>{const p=decodeURIComponent(url.split("path=")[1]);let 
  else if(p.startsWith("v1/club-stats/NJD/20262027"))d=club;else if(p.startsWith("v1/club-stats/PIT/20262027"))d={skaters:[]};else if(p.startsWith("v1/club-stats/PIT"))d=club;
  else if(p.includes("boxscore"))d=box;
  else if(p==="records/franchise")d={data:[{id:23,teamAbbrev:"NJD",lastSeasonId:null},{id:17,teamAbbrev:"PIT",lastSeasonId:null}]};
- else if(p.startsWith("records/")){const[,kind,fid,stat]=p.split("/");d={data:[{lastName:fid==="23"?(kind==="goalies"?"Brodeur":"Elias"):(kind==="goalies"?"Fleury":"Crosby"),[stat]:fid==="23"?408:1761}]};}else return{ok:false,status:404};return{ok:true,json:async()=>d};};
+ else if(p.startsWith("records/")){const[,kind,fid,stat]=p.split("/");d={data:[{lastName:fid==="23"?(kind==="goalies"?"Brodeur":"Elias"):(kind==="goalies"?"Fleury":"Crosby"),[stat]:fid==="23"?408:1761,...(kind==="season"?{seasonId:19881989}:{})}]};}else return{ok:false,status:404};return{ok:true,json:async()=>d};};
 const strip=h=>h.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ');
 eval(appJs+`
 (async()=>{await new Promise(r=>setImmediate(r));for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r));

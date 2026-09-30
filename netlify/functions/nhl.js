@@ -4,15 +4,21 @@
 // Also proxies a few franchise-record lookups from records.nhl.com:
 //   path=records/franchise                       -> list of franchises (ids + abbrevs)
 //   path=records/{skaters|goalies}/{franchiseId}/{stat} -> career leader for that stat
+//   path=records/season/{franchiseId}/{stat}            -> best single season for that stat (api.nhle.com/stats)
 const RECORD_ENDPOINTS = { skaters: "skater-career-scoring-regular-season", goalies: "goalie-career-stats" };
 
 function recordsUrl(path) {
   if (path === "records/franchise") return "https://records.nhl.com/site/api/franchise";
-  const m = path.match(/^records\/(skaters|goalies)\/(\d+)\/(\w+)$/);
+  const m = path.match(/^records\/(skaters|goalies|season)\/(\d+)\/(\w+)$/);
   if (!m) return null;
   const [, kind, franchiseId, stat] = m;
-  const filter = `franchiseId=${franchiseId}${kind === "goalies" ? " and gameTypeId=2" : ""}`;
   const sort = JSON.stringify([{ property: stat, direction: "DESC" }]);
+  // Best single regular season for a stat, from the NHL stats API
+  if (kind === "season") {
+    const filter = `franchiseId=${franchiseId} and gameTypeId=2`;
+    return `https://api.nhle.com/stats/rest/en/skater/summary?isAggregate=false&isGame=false&cayenneExp=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}&limit=1`;
+  }
+  const filter = `franchiseId=${franchiseId}${kind === "goalies" ? " and gameTypeId=2" : ""}`;
   return `https://records.nhl.com/site/api/${RECORD_ENDPOINTS[kind]}?cayenneExp=${encodeURIComponent(filter)}&sort=${encodeURIComponent(sort)}&limit=1`;
 }
 

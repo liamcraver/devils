@@ -8,7 +8,8 @@ Live at https://devils-stats.netlify.app, auto-deploys from this repo via Netlif
 - `netlify/functions/nhl.js`: proxy to `https://api-web.nhle.com/` (avoids CORS). Called as
   `/.netlify/functions/nhl?path=v1/...`. Only `v1/` paths are allowed. Cache: 10s for play-by-play/score, 300s otherwise.
   Also proxies records.nhl.com via `path=records/franchise` and `path=records/{skaters|goalies}/{franchiseId}/{stat}`
-  (career leader for one stat; the function builds the cayenneExp/sort query). Cache: 1 day.
+  (career leader for one stat; the function builds the cayenneExp/sort query), and `path=records/season/{franchiseId}/{stat}`
+  (best single regular season, from `api.nhle.com/stats/rest/en/skater/summary`). Cache: 1 day.
 - `netlify.toml`: publish `.`, functions in `netlify/functions`.
 - `tests/harness.js`: smoke test that runs the page script against mock API responses.
 
@@ -32,8 +33,8 @@ Live at https://devils-stats.netlify.app, auto-deploys from this repo via Netlif
 - `creditTeam()` decides which team an event counts for (faceoff winner, hitter, blocker, shooter, penalized player). Uses the player's roster team, falling back to `eventOwnerTeamId`.
 - "Whistle in first minute" = a `stoppage`, `goal`, or `penalty` event before 01:00 of the period.
 - "Shots" = `shot-on-goal` + `goal`. Shootout plays (periodType SO) are excluded from all stats.
-- Franchise records: career leaders (points, goals, assists, GP, goalie wins, shutouts) load live via `franchiseRecords()`.
-  Hand-kept `RECORDS` lines fill in labels the live lookup doesn't cover (single-season records) and are the fallback if it fails.
+- Franchise records: career leaders (points, goals, assists, GP, goalie wins, shutouts) and single-season goals/points load live via `franchiseRecords()`.
+  Hand-kept `RECORDS` lines fill in labels the live lookup doesn't cover and are the fallback if it fails.
 - Last game recap shows goals, assists, and points (boxscore `points`, falling back to goals + assists).
 
 ## Known risks
