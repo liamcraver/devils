@@ -33,7 +33,8 @@ exports.handler = async (event) => {
     // Only allow NHL v1 paths (letters, numbers, dashes, slashes)
     url = `https://api-web.nhle.com/${path}`;
     // Live game data gets a short cache; slower-moving data a longer one
-    maxAge = /play-by-play|\/score\//.test(path) ? 10 : 300;
+    // Player bios and rosters barely change, so they can sit for an hour
+    maxAge = /play-by-play|\/score\//.test(path) ? 10 : /^v1\/(player|roster)\//.test(path) ? 3600 : 300;
   }
   if (!url) return { statusCode: 400, body: JSON.stringify({ error: "Invalid path" }) };
 

@@ -24,6 +24,7 @@ Live at https://devils-stats.netlify.app, auto-deploys from this repo via Netlif
 - `v1/gamecenter/{id}/play-by-play`: all live-tracker data (plays, rosterSpots, gameState, clock)
 - `v1/gamecenter/{id}/boxscore`: last game and last meeting recaps
 - `v1/standings/now`: standings row
+- `v1/player/{id}/landing`: Misc tab bios (birthplace, `draftDetails`); `v1/roster/{TEAM}/current` lists players when the game lineup (`rosterSpots`) isn't posted yet
 - `v1/club-stats/{TEAM}/{season}/2`: stat leaders and goalies (falls back to previous season if empty)
 - records.nhl.com `franchise`, `skater-career-scoring-regular-season`, `goalie-career-stats`: franchise career leaders for both teams
 
@@ -35,6 +36,9 @@ Live at https://devils-stats.netlify.app, auto-deploys from this repo via Netlif
 - "Shots" = `shot-on-goal` + `goal`. Shootout plays (periodType SO) are excluded from all stats.
 - Franchise records: career leaders (points, goals, assists, GP, goalie wins, shutouts) and single-season goals/points load live via `franchiseRecords()`.
   Hand-kept `RECORDS` lines fill in labels the live lookup doesn't cover and are the fallback if it fails.
+- Tabs: Live tracker, Box score, Matchup, Misc. Box score "This game" is tallied from play-by-play by `tallyPlays()` (per period or whole game; no TOI or +/-, which aren't in the feed);
+  "Last game" is the previous game's boxscore. Misc loads one landing per player (8 at a time) only when the tab is opened.
+  Tables use `sortedTable()`: tap a header to rank, blanks always sort last. Blocked shots with reason `teammate-blocked` aren't counted, matching the NHL.
 - Last game recap shows goals, assists, and points (boxscore `points`, falling back to goals + assists).
 
 ## Known risks

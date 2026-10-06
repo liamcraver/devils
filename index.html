@@ -31,8 +31,9 @@
   .live { color: var(--red); font-weight: 600; }
   .updated { font-size: .8rem; color: var(--muted); }
 
-  .views { display: flex; gap: 4px; margin: 16px 0 14px; background: var(--empty); border-radius: 8px; padding: 4px; width: fit-content; }
-  .views button { border: 0; background: none; padding: 6px 16px; border-radius: 6px; font-weight: 600; color: var(--muted); }
+  .views { display: flex; gap: 4px; margin: 16px 0 14px; background: var(--empty); border-radius: 8px; padding: 4px; width: fit-content; max-width: 100%; overflow-x: auto; }
+  .views button { border: 0; background: none; padding: 6px 16px; border-radius: 6px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+  @media (max-width: 480px) { .views button { padding: 6px 10px; } }
   .views button[aria-selected="true"] { background: var(--board); color: var(--ink); box-shadow: 0 1px 2px rgba(20,32,43,.15); }
 
   .grid { display: grid; gap: 14px; grid-template-columns: 1fr; }
@@ -56,7 +57,8 @@
   .when { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 6px; white-space: nowrap; }
   .tm { color: var(--muted); font-size: .82em; font-weight: 600; }
 
-  .ptabs { display: flex; gap: 2px; border-bottom: 2px solid var(--rule); margin-bottom: 12px; overflow-x: auto; }
+  .ptabs { display: flex; gap: 2px; border-bottom: 2px solid var(--rule); margin-bottom: 12px; overflow-x: auto; scrollbar-width: none; }
+  .ptabs::-webkit-scrollbar { display: none; }
   .ptabs button { background: none; border: 0; padding: 6px 14px; font-family: "Barlow Condensed", sans-serif; font-size: 1.15rem; font-weight: 600; color: var(--muted); border-bottom: 3px solid transparent; margin-bottom: -2px; }
   .ptabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--blue); }
 
@@ -77,6 +79,17 @@
   .pos { color: var(--green); } .neg { color: var(--red); }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; }
   .kv dt { color: var(--muted); } .kv dd { margin: 0; font-weight: 500; }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; }
+  .seg { display: inline-flex; gap: 2px; background: var(--empty); border-radius: 6px; padding: 3px; }
+  .seg button { border: 0; background: none; padding: 3px 12px; border-radius: 4px; font-size: .88rem; font-weight: 600; color: var(--muted); }
+  .seg button[aria-pressed="true"] { background: var(--board); color: var(--ink); box-shadow: 0 1px 2px rgba(20,32,43,.15); }
+  th button.sort { border: 0; background: none; padding: 0; font: inherit; color: inherit; white-space: nowrap; }
+  th[aria-sort="ascending"], th[aria-sort="descending"] { color: var(--ink); }
+  table.box td:first-child, table.box th:first-child { position: sticky; left: 0; background: var(--board); z-index: 1; }
+  .chip.sm { min-width: 0; padding: 0 7px; font-size: .75rem; }
+  .rk { display: inline-block; min-width: 1.7em; color: var(--muted); font-size: .8em; }
+  .sub { color: var(--muted); font-size: .85rem; margin: -4px 0 8px; }
 </style>
 </head>
 <body>
@@ -93,7 +106,9 @@
 <main class="wrap">
   <div class="views" role="tablist" aria-label="View">
     <button role="tab" data-view="live" aria-selected="true">Live tracker</button>
+    <button role="tab" data-view="box" aria-selected="false">Box score</button>
     <button role="tab" data-view="matchup" aria-selected="false">Matchup</button>
+    <button role="tab" data-view="misc" aria-selected="false">Misc</button>
   </div>
   <div id="view"><p class="note">Loading…</p></div>
 </main>
@@ -141,7 +156,8 @@ const COLORS = {
    ===================================================================== */
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const S = { games: [], game: null, pbp: null, matchup: null, view: "live", period: null, selected: null, timer: null, token: 0, updated: null };
+const S = { games: [], game: null, pbp: null, matchup: null, view: "live", period: null, selected: null, timer: null, token: 0, updated: null,
+  boxGame: null, boxPeriod: null, bios: null, sorts: {}, teamFilter: "both" };
 
 const cache = new Map();
 async function api(path, { fresh = false } = {}) {
@@ -199,7 +215,7 @@ async function selectGame(id) {
   clearTimeout(S.timer);
   const token = ++S.token;
   S.game = S.games.find((g) => g.id === id);
-  S.pbp = null; S.matchup = null; S.period = null; S.selected = null;
+  S.pbp = null; S.matchup = null; S.period = null; S.selected = null; S.boxGame = null; S.boxPeriod = null; S.bios = null;
   S.view = isFuture(S.game.gameState) ? "matchup" : "live";
   $("#gamepick").value = id;
   history.replaceState(null, "", `?game=${id}`);
@@ -278,6 +294,43 @@ async function loadMatchup(token) {
   render();
 }
 
+// Run fn over items with at most n requests in flight
+async function pool(items, n, fn) {
+  const out = new Array(items.length); let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const j = i++; out[j] = await fn(items[j]); } }));
+  return out;
+}
+
+// Player bios for the Misc tab: this game's lineup if posted, else both current rosters
+async function loadBios(token) {
+  const g = S.game;
+  S.bios = { for: g.id, list: null, error: null, source: null };
+  try {
+    const abbrevById = new Map([[g.awayTeam.id, g.awayTeam.abbrev], [g.homeTeam.id, g.homeTeam.abbrev]]);
+    const spots = S.pbp?.rosterSpots ?? [];
+    let list;
+    if (spots.length) {
+      list = spots.map((p) => ({ id: p.playerId, team: abbrevById.get(p.teamId), num: p.sweaterNumber, pos: p.positionCode }));
+      S.bios.source = "lineup";
+    } else {
+      const rosters = await Promise.all([g.awayTeam.abbrev, g.homeTeam.abbrev].map((t) => api(`v1/roster/${t}/current`)
+        .then((r) => ["forwards", "defensemen", "goalies"].flatMap((k) => r[k] ?? []).map((p) => ({ id: p.id, team: t, num: p.sweaterNumber, pos: p.positionCode })))
+        .catch(() => [])));
+      list = rosters.flat();
+      S.bios.source = "roster";
+    }
+    const out = await pool(list, 8, async (p) => {
+      try { return { ...p, bio: await api(`v1/player/${p.id}/landing`) }; } catch (e) { return { ...p, bio: null }; }
+    });
+    if (token !== S.token) return;
+    S.bios.list = out;
+  } catch (e) {
+    if (token !== S.token) return;
+    S.bios.error = e.message;
+  }
+  render();
+}
+
 /* =====================================================================
    HELPERS FOR PLAY-BY-PLAY
    ===================================================================== */
@@ -300,6 +353,8 @@ const who = (pid) => (pid ? `${esc(pname(pid))} <span class="tm">#${players.get(
 const chip = (tid, label) => { const t = teams.get(tid); return t ? `<span class="chip" style="background:${t.bg};color:${t.fg}">${label ?? t.name}</span>` : `<span class="chip none">—</span>`; };
 const shooterOf = (p) => p.details?.shootingPlayerId ?? p.details?.scoringPlayerId;
 const isShot = (p) => p.typeDescKey === "shot-on-goal" || p.typeDescKey === "goal";
+// All plays in order, minus the shootout (excluded from every stat)
+const gamePlays = () => [...(S.pbp.plays || [])].sort((a, b) => a.sortOrder - b.sortOrder).filter((p) => p.periodDescriptor?.periodType !== "SO");
 
 // Which team gets credit for an event
 function creditTeam(p) {
@@ -330,7 +385,11 @@ function describe(p) {
 function render() {
   renderScoreboard();
   document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-selected", b.dataset.view === S.view));
-  $("#view").innerHTML = S.view === "live" ? renderLive() : renderMatchup();
+  if (S.view === "misc" && S.game && S.bios?.for !== S.game.id && (S.pbp || S.pbpError)) loadBios(S.token);
+  // Keep sideways-scrolled tables where they were across live refreshes
+  const scrolled = [...document.querySelectorAll(".scroll[id]")].map((el) => [el.id, el.scrollLeft]);
+  $("#view").innerHTML = { live: renderLive, box: renderBox, matchup: renderMatchup, misc: renderMisc }[S.view]();
+  scrolled.forEach(([id, x]) => { const el = document.getElementById(id); if (el) el.scrollLeft = x; });
 }
 
 function renderScoreboard() {
@@ -359,7 +418,7 @@ function renderLive() {
   if (S.pbpError && !S.pbp) return `<p class="note error">${esc(S.pbpError)}</p>`;
   if (!S.pbp) return `<p class="note">Loading play-by-play…</p>`;
   buildLookups();
-  const plays = [...(S.pbp.plays || [])].sort((a, b) => a.sortOrder - b.sortOrder).filter((p) => p.periodDescriptor?.periodType !== "SO");
+  const plays = gamePlays();
   if (!plays.length) return `<p class="note">No plays yet. This fills in automatically once the puck drops. Check the Matchup tab for the pregame numbers.</p>`;
 
   const us = [...teams.values()].find((t) => t.abbrev === TEAM), them = [...teams.values()].find((t) => t.abbrev !== TEAM);
@@ -398,7 +457,7 @@ function renderLive() {
   const count = (fn, t) => sel.filter((p) => fn(p) && creditTeam(p) === t?.id).length;
   const totals = [
     ["Goals", (p) => p.typeDescKey === "goal"], ["Shots", isShot], ["Takeaways", (p) => p.typeDescKey === "takeaway"],
-    ["Faceoffs won", (p) => p.typeDescKey === "faceoff"], ["Hits", (p) => p.typeDescKey === "hit"], ["Blocked shots", (p) => p.typeDescKey === "blocked-shot"],
+    ["Faceoffs won", (p) => p.typeDescKey === "faceoff"], ["Hits", (p) => p.typeDescKey === "hit"], ["Blocked shots", (p) => p.typeDescKey === "blocked-shot" && p.details?.reason !== "teammate-blocked"],
   ].map(([l, f]) => `<tr><td>${l}</td><td class="num">${count(f, us)}</td><td class="num">${count(f, them)}</td></tr>`).join("");
 
   // Goals & penalties (whole game)
@@ -554,11 +613,196 @@ function renderMatchup() {
   </div>`;
 }
 
+/* ---------- Sortable tables (Box score and Misc) ---------- */
+// cols: [{ k, label, val(row) for sorting, fmt(row) -> HTML (optional), num, title }]. The first column is the player.
+function sortedTable(id, cols, rows, def) {
+  const s = (S.sorts[id] ??= def);
+  const col = cols.find((c) => c.k === s.k) ?? cols[0];
+  const blank = (v) => v == null || v === "" || Number.isNaN(v);
+  const sorted = [...rows].sort((a, b) => {
+    const x = col.val(a), y = col.val(b);
+    if (blank(x) || blank(y)) return blank(x) - blank(y); // blanks always last
+    const c = typeof x === "number" ? x - y : String(x).localeCompare(String(y));
+    return s.dir === "asc" ? c : -c;
+  });
+  if (!sorted.length) return `<p class="empty">No players.</p>`;
+  const head = cols.map((c) => {
+    const on = c.k === col.k, dir = on ? (s.dir === "asc" ? "ascending" : "descending") : "none";
+    return `<th class="${c.num ? "num" : ""}" aria-sort="${dir}"><button class="sort" data-sort="${id}:${c.k}" data-dir="${c.num ? "desc" : "asc"}"${c.title ? ` title="${c.title}"` : ""}>${c.label}${on ? (s.dir === "asc" ? " ▲" : " ▼") : ""}</button></th>`;
+  }).join("");
+  const body = sorted.map((r, i) => `<tr>${cols.map((c, j) => {
+    const v = c.fmt ? c.fmt(r) : esc(c.val(r) ?? "");
+    return `<td class="${c.num ? "num" : ""}">${j === 0 ? `<span class="rk">${i + 1}</span>` : ""}${v}</td>`;
+  }).join("")}</tr>`).join("");
+  return `<div class="scroll" id="tbl-${id}"><table class="box"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+const teamChip = (abbrev) => { const [bg, fg] = COLORS[abbrev] ?? ["#5B6B7A", "#fff"]; return `<span class="chip sm" style="background:${bg};color:${fg}">${esc(abbrev ?? "—")}</span>`; };
+const teamOk = (abbrev) => S.teamFilter === "both" || (S.teamFilter === "us") === (abbrev === TEAM);
+const teamSeg = (opp) => `<div class="seg" role="group" aria-label="Team">${[["both", "Both"], ["us", TEAM], ["them", opp]].map(([v, l]) => `<button data-team="${v}" aria-pressed="${S.teamFilter === v}">${esc(l)}</button>`).join("")}</div>`;
+const plusMinus = (v) => (v == null ? "" : v > 0 ? `+${v}` : `${v}`);
+const pctCell = (v) => (v == null ? "—" : `${Math.round(v * 100)}%`);
+const playerCell = (r) => `${esc(r.name)} <span class="tm">#${r.num ?? ""}</span>`;
+const nameCol = { k: "name", label: "Player", val: (r) => r.name, fmt: playerCell };
+const teamCol = { k: "team", label: "Team", val: (r) => r.team, fmt: (r) => teamChip(r.team) };
+const posCol = { k: "pos", label: "Pos", val: (r) => r.pos };
+const numCol = (k, label, title) => ({ k, label, title, num: true, val: (r) => r[k] });
+
+/* ---------- Box score view ---------- */
+function renderBox() {
+  const started = !!S.pbp && gamePlays().length > 0;
+  const which = S.boxGame ?? (started || !S.matchup?.lastGame ? "this" : "last");
+  const lg = S.matchup?.lastGame;
+  const seg = `<div class="seg" role="group" aria-label="Game"><button data-boxgame="this" aria-pressed="${which === "this"}">This game</button><button data-boxgame="last" aria-pressed="${which === "last"}">Last game</button></div>`;
+  const opp = which === "last" && lg ? oppOf(lg).abbrev : oppOf(S.game).abbrev;
+  return `<div class="stack"><div class="toolbar">${seg}${teamSeg(opp)}</div>${which === "this" ? liveBox() : lastBox()}</div>`;
+}
+
+// Per-player counts from play-by-play
+function tallyPlays(plays) {
+  const st = new Map();
+  const bump = (pid, k, n = 1) => { if (!pid) return; if (!st.has(pid)) st.set(pid, {}); const o = st.get(pid); o[k] = (o[k] ?? 0) + n; };
+  for (const p of plays) {
+    const d = p.details || {};
+    switch (p.typeDescKey) {
+      case "goal": bump(d.scoringPlayerId, "g"); bump(d.scoringPlayerId, "sog"); bump(d.assist1PlayerId, "a"); bump(d.assist2PlayerId, "a"); bump(d.goalieInNetId, "sa"); bump(d.goalieInNetId, "ga"); break;
+      case "shot-on-goal": bump(d.shootingPlayerId, "sog"); bump(d.goalieInNetId, "sa"); break;
+      case "missed-shot": bump(d.shootingPlayerId, "miss"); break;
+      case "hit": bump(d.hittingPlayerId, "hits"); break;
+      case "blocked-shot": if (d.reason !== "teammate-blocked") bump(d.blockingPlayerId, "blk"); break; // the NHL doesn't count blocking your own teammate
+      case "penalty": bump(d.committedByPlayerId, "pim", d.duration ?? 0); break;
+      case "faceoff": bump(d.winningPlayerId, "fow"); bump(d.losingPlayerId, "fol"); break;
+      case "takeaway": bump(d.playerId, "tk"); break;
+      case "giveaway": bump(d.playerId, "gv"); break;
+    }
+  }
+  return st;
+}
+
+function liveBox() {
+  if (S.pbpError && !S.pbp) return `<p class="note error">${esc(S.pbpError)}</p>`;
+  if (!S.pbp) return `<p class="note">Loading play-by-play…</p>`;
+  buildLookups();
+  const plays = gamePlays();
+  if (!plays.length) return `<section class="panel"><p class="empty">This game's box score fills in once the puck drops. Tap Last game for the Devils' previous game.</p></section>`;
+
+  const periods = [...new Set(plays.map((p) => p.periodDescriptor.number))];
+  const pdOf = (n) => plays.find((p) => p.periodDescriptor.number === n).periodDescriptor;
+  const period = periods.includes(S.boxPeriod) ? S.boxPeriod : "all";
+  const st = tallyPlays(period === "all" ? plays : plays.filter((p) => p.periodDescriptor.number === period));
+  const z = (o, k) => o?.[k] ?? 0;
+  const rows = (S.pbp.rosterSpots ?? []).map((p) => {
+    const o = st.get(p.playerId), fo = z(o, "fow") + z(o, "fol"), sa = z(o, "sa");
+    return {
+      name: `${p.firstName?.default ?? ""} ${p.lastName?.default ?? ""}`.trim(), num: p.sweaterNumber, pos: p.positionCode,
+      team: teams.get(p.teamId)?.abbrev, g: z(o, "g"), a: z(o, "a"), p: z(o, "g") + z(o, "a"), sog: z(o, "sog"),
+      att: z(o, "sog") + z(o, "miss"), hits: z(o, "hits"), blk: z(o, "blk"), pim: z(o, "pim"), fow: z(o, "fow"), fol: z(o, "fol"),
+      fo: fo ? z(o, "fow") / fo : null, tk: z(o, "tk"), gv: z(o, "gv"), sa, ga: z(o, "ga"), sv: sa - z(o, "ga"), svp: sa ? (sa - z(o, "ga")) / sa : null,
+    };
+  }).filter((r) => teamOk(r.team));
+
+  const sk = [nameCol, teamCol, numCol("g", "G", "Goals"), numCol("a", "A", "Assists"), numCol("p", "P", "Points"),
+    numCol("sog", "SOG", "Shots on goal"), numCol("att", "ATT", "Shot attempts: on goal + missed (not blocked)"), numCol("hits", "HIT", "Hits"), numCol("blk", "BLK", "Blocked shots"),
+    numCol("pim", "PIM", "Penalty minutes"), numCol("fow", "FOW", "Faceoffs won"), numCol("fol", "FOL", "Faceoffs lost"),
+    { k: "fo", label: "FO%", title: "Faceoff win %", num: true, val: (r) => r.fo, fmt: (r) => pctCell(r.fo) },
+    numCol("tk", "TK", "Takeaways"), numCol("gv", "GV", "Giveaways"), posCol];
+  const gl = [nameCol, teamCol, numCol("sa", "SA", "Shots against"), numCol("sv", "SV", "Saves"), numCol("ga", "GA", "Goals against"),
+    { k: "svp", label: "SV%", title: "Save %", num: true, val: (r) => r.svp, fmt: (r) => (r.svp == null ? "—" : pct3(r.svp)) }];
+
+  const tabs = [...periods.map((n) => [n, periodLabel(pdOf(n))]), ["all", "Game"]];
+  const note = `${period === "all" ? "Whole game" : `${periodLabel(pdOf(period))} only`}.${isLive(S.pbp.gameState) ? ` Updates every ${LIVE_REFRESH_MS / 1000} seconds.` : ""} Ice time and plus/minus aren't in the live feed; they show under Last game once a game is final.`;
+  return `<section class="panel">
+    <div class="ptabs" role="tablist" aria-label="Period">${tabs.map(([v, l]) => `<button role="tab" data-boxperiod="${v}" aria-selected="${v === period}">${l}</button>`).join("")}</div>
+    <p class="sub">${note}</p>
+    <h2>Skaters</h2>${sortedTable("liveSk", sk, rows.filter((r) => r.pos !== "G"), { k: "p", dir: "desc" })}
+    <h2 style="margin-top:16px">Goalies</h2>${sortedTable("liveG", gl, rows.filter((r) => r.pos === "G"), { k: "sa", dir: "desc" })}
+  </section>`;
+}
+
+function lastBox() {
+  const M = S.matchup;
+  if (!M) return `<p class="note">Loading last game…</p>`;
+  const lg = M.lastGame, box = M.lastBox;
+  if (!lg) return `<section class="panel"><p class="empty">No earlier games this season.</p></section>`;
+  if (!box) return `<section class="panel"><p class="empty">Couldn't load the last game's boxscore.</p></section>`;
+  const sk = [], gl = [];
+  for (const side of ["awayTeam", "homeTeam"]) {
+    const team = box[side]?.abbrev, st = box.playerByGameStats?.[side] ?? {};
+    if (!teamOk(team)) continue;
+    const base = (p) => ({ ...p, name: p.name?.default ?? "", num: p.sweaterNumber, pos: p.position, team });
+    [...(st.forwards ?? []), ...(st.defense ?? [])].forEach((p) => sk.push(base(p)));
+    (st.goalies ?? []).forEach((p) => gl.push(base(p)));
+  }
+  const skCols = [nameCol, teamCol, numCol("goals", "G", "Goals"), numCol("assists", "A", "Assists"),
+    { k: "points", label: "P", title: "Points", num: true, val: (r) => r.points ?? (r.goals ?? 0) + (r.assists ?? 0) },
+    { k: "plusMinus", label: "+/-", title: "Plus/minus", num: true, val: (r) => r.plusMinus, fmt: (r) => plusMinus(r.plusMinus) },
+    numCol("sog", "SOG", "Shots on goal"), numCol("hits", "HIT", "Hits"), numCol("blockedShots", "BLK", "Blocked shots"),
+    numCol("pim", "PIM", "Penalty minutes"), numCol("powerPlayGoals", "PPG", "Power-play goals"),
+    { k: "fo", label: "FO%", title: "Faceoff win % (blank if none taken)", num: true, val: (r) => r.faceoffWinningPctg || null, fmt: (r) => (r.faceoffWinningPctg ? pctCell(r.faceoffWinningPctg) : "—") },
+    { k: "toi", label: "TOI", title: "Time on ice", num: true, val: (r) => secs(r.toi), fmt: (r) => esc(r.toi ?? "") },
+    numCol("shifts", "SHF", "Shifts"), numCol("takeaways", "TK", "Takeaways"), numCol("giveaways", "GV", "Giveaways"), posCol];
+  const glCols = [nameCol, teamCol, { k: "decision", label: "Dec", title: "Decision", val: (r) => r.decision },
+    numCol("shotsAgainst", "SA", "Shots against"), numCol("saves", "SV", "Saves"), numCol("goalsAgainst", "GA", "Goals against"),
+    { k: "savePctg", label: "SV%", title: "Save %", num: true, val: (r) => r.savePctg, fmt: (r) => pct3(r.savePctg) },
+    { k: "toi", label: "TOI", title: "Time on ice", num: true, val: (r) => secs(r.toi), fmt: (r) => esc(r.toi ?? "") }];
+  return `<section class="panel">
+    <h2>${esc(resultText(lg))} ${atHome(lg) ? "vs" : "at"} ${esc(oppOf(lg).abbrev)}, ${shortDate(lg.startTimeUTC)}</h2>
+    <p class="sub">Tap a column to rank by it; tap again to flip the order.</p>
+    <h3>Skaters</h3>${sortedTable("lastSk", skCols, sk, { k: "points", dir: "desc" })}
+    <h3>Goalies</h3>${sortedTable("lastG", glCols, gl, { k: "toi", dir: "desc" })}
+  </section>`;
+}
+
+/* ---------- Misc (player info) view ---------- */
+const ageOf = (iso) => { const b = new Date(`${iso}T00:00:00`), n = new Date(); return n.getFullYear() - b.getFullYear() - (n < new Date(n.getFullYear(), b.getMonth(), b.getDate()) ? 1 : 0); };
+const ordinal = (n) => `${n}${[11, 12, 13].includes(n % 100) ? "th" : ["th", "st", "nd", "rd"][n % 10] ?? "th"}`;
+const heightOf = (inches) => (inches ? `${Math.floor(inches / 12)}'${inches % 12}"` : "");
+
+function renderMisc() {
+  const B = S.bios;
+  if (B?.error) return `<p class="note error">${esc(B.error)}</p>`;
+  if (!B?.list) return `<p class="note">Loading player info…</p>`;
+  const rows = B.list.filter((p) => teamOk(p.team)).map((p) => {
+    const b = p.bio ?? {}, d = b.draftDetails;
+    return {
+      name: `${b.firstName?.default ?? ""} ${b.lastName?.default ?? ""}`.trim() || "Unknown", num: p.num ?? b.sweaterNumber, pos: p.pos ?? b.position, team: p.team,
+      age: b.birthDate ? ageOf(b.birthDate) : null, born: b.birthDate ?? "",
+      birthplace: [b.birthCity?.default, b.birthStateProvince?.default, b.birthCountry].filter(Boolean).join(", "), country: b.birthCountry ?? "",
+      draftTeam: d?.teamAbbrev ?? null, draftYear: d?.year ?? null, round: d?.round, pick: d?.pickInRound, overall: d?.overallPick ?? null,
+      height: b.heightInInches ?? null, weight: b.weightInPounds ?? null, hand: b.shootsCatches ?? "",
+    };
+  });
+  const cols = [nameCol, teamCol, posCol,
+    { k: "age", label: "Age", num: true, val: (r) => r.age },
+    { k: "birthplace", label: "Birthplace", val: (r) => r.birthplace },
+    { k: "country", label: "Ctry", title: "Birth country", val: (r) => r.country },
+    { k: "draftTeam", label: "Drafted by", val: (r) => r.draftTeam, fmt: (r) => (r.draftTeam ? teamChip(r.draftTeam) : `<span class="tm">Undrafted</span>`) },
+    { k: "draftYear", label: "Year", title: "Draft year", num: true, val: (r) => r.draftYear },
+    { k: "overall", label: "Pick", title: "Round, pick in round, and overall pick", num: true, val: (r) => r.overall, fmt: (r) => (r.overall ? `Rd ${r.round}, #${r.pick} <span class="tm">(${ordinal(r.overall)} overall)</span>` : "") },
+    { k: "height", label: "Ht", num: true, val: (r) => r.height, fmt: (r) => esc(heightOf(r.height)) },
+    { k: "weight", label: "Wt", num: true, val: (r) => r.weight },
+    { k: "hand", label: "S/C", title: "Shoots/catches", val: (r) => r.hand }];
+  const missing = B.list.filter((p) => !p.bio).length;
+  return `<div class="stack"><div class="toolbar"><span></span>${teamSeg(oppOf(S.game).abbrev)}</div>
+    <section class="panel"><h2>Player info</h2>
+    <p class="sub">${B.source === "lineup" ? "Players dressed for this game." : "Current rosters; the game-night lineup isn't posted yet."} Tap a column to rank by it.${missing ? ` ${missing} player${missing > 1 ? "s" : ""} couldn't be loaded.` : ""}</p>
+    ${sortedTable("misc", cols, rows, { k: "overall", dir: "asc" })}</section></div>`;
+}
+
 /* ---------- Events ---------- */
 document.addEventListener("click", (e) => {
   const v = e.target.closest("[data-view]"); if (v) { S.view = v.dataset.view; render(); return; }
   const p = e.target.closest("[data-period]"); if (p) { S.period = p.dataset.period === "all" ? "all" : Number(p.dataset.period); S.selected = null; render(); return; }
-  const s = e.target.closest("[data-sel]"); if (s) { S.selected = S.selected === s.dataset.sel ? null : s.dataset.sel; render(); }
+  const s = e.target.closest("[data-sel]"); if (s) { S.selected = S.selected === s.dataset.sel ? null : s.dataset.sel; render(); return; }
+  const bg = e.target.closest("[data-boxgame]"); if (bg) { S.boxGame = bg.dataset.boxgame; render(); return; }
+  const bp = e.target.closest("[data-boxperiod]"); if (bp) { S.boxPeriod = bp.dataset.boxperiod === "all" ? "all" : Number(bp.dataset.boxperiod); render(); return; }
+  const tf = e.target.closest("[data-team]"); if (tf) { S.teamFilter = tf.dataset.team; render(); return; }
+  const so = e.target.closest("[data-sort]");
+  if (so) {
+    const [id, k] = so.dataset.sort.split(":"), cur = S.sorts[id];
+    S.sorts[id] = cur?.k === k ? { k, dir: cur.dir === "asc" ? "desc" : "asc" } : { k, dir: so.dataset.dir };
+    render();
+  }
 });
 $("#gamepick").addEventListener("change", (e) => selectGame(Number(e.target.value)));
 
